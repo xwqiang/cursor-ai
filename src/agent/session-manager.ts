@@ -80,7 +80,9 @@ export class SessionManager {
   ): ReturnType<typeof setTimeout> {
     return setTimeout(() => {
       log.session(`idle timeout  chat=${chatId}`);
-      void this.disposeSessionFrom(store, chatId, useAdvanced);
+      void this.disposeSessionFrom(store, chatId, useAdvanced).catch((err) => {
+        log.warn(`dispose after idle timeout failed  chat=${chatId}  err=${String(err)}`);
+      });
     }, SESSION_IDLE_MS);
   }
 

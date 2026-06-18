@@ -1,4 +1,4 @@
-import { CursorAgentError } from "@cursor/sdk";
+import { formatAgentError } from "./agent/connect-error.js";
 import { basename, dirname, resolve } from "node:path";
 import { createReadStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -953,10 +953,7 @@ export async function runBot(): Promise<void> {
       await ctx.telegram.setMessageReaction(ctx.chat.id, ctx.message.message_id, [
         { type: "emoji", emoji: "👎" },
       ]).catch(() => undefined);
-      const errMsg = err instanceof CursorAgentError
-        ? `Agent 错误: ${err.message}`
-        : String(err);
-      await ctx.reply(`❌ ${errMsg}`, {
+      await ctx.reply(`❌ ${formatAgentError(err)}`, {
         reply_parameters: { message_id: ctx.message.message_id },
         reply_markup: {
           inline_keyboard: [[
@@ -1173,11 +1170,7 @@ export async function runBot(): Promise<void> {
       void ctx.telegram.setMessageReaction(ctx.chat.id, msg.message_id, [
         { type: "emoji", emoji: "👎" },
       ]).catch(() => undefined);
-      const errMsg =
-        error instanceof CursorAgentError
-          ? `Cursor SDK 错误: ${error.message}`
-          : `回答失败: ${String(error)}`;
-      await ctx.reply(`❌ ${errMsg}`, {
+      await ctx.reply(`❌ ${formatAgentError(error)}`, {
         reply_parameters: { message_id: msg.message_id },
         reply_markup: {
           inline_keyboard: [[

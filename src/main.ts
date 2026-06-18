@@ -1,5 +1,8 @@
+import { installConnectErrorGuard } from "./agent/connect-error.js";
 import { releaseBotInstanceLock } from "./bot/instance-lock.js";
 import { runBot } from "./bot.js";
+
+installConnectErrorGuard();
 
 void runBot().catch((err: unknown) => {
   releaseBotInstanceLock();
