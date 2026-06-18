@@ -1,7 +1,11 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, dirname, basename } from "node:path";
+import { resolve, basename } from "node:path";
 import { BOT_ROOT } from "../config/paths.js";
-import type { Project, ProjectsConfig } from "./types.js";
+import type { GitProject, Project, ProjectsConfig } from "./types.js";
+
+function slugFromGitUrl(url: string): string {
+  return url.replace(/.*\//, "").replace(/\.git$/, "");
+}
 
 const DATA_DIR = resolve(BOT_ROOT, "data");
 const PROJECTS_PATH = resolve(DATA_DIR, "projects.json");
@@ -29,20 +33,40 @@ export class ProjectRegistry {
     this.config = read();
   }
 
-  /** Initialize from PROJECT_ROOT if no projects.json exists yet. */
-  initDefault(projectRoot: string): void {
+  /** Initialize from env if no projects.json exists yet. Git URL takes priority over local path. */
+  initDefaultFromEnv(): void {
     if (this.config.projects.length > 0) return;
-    const id = basename(projectRoot);
-    this.config = {
-      projects: [{
-        id,
-        name: id,
-        kind: "local",
-        path: projectRoot,
-      }],
-      defaultProjectId: id,
-    };
-    write(this.config);
+
+    const gitUrl = process.env.PROJECT_GIT_URL?.trim();
+    if (gitUrl) {
+      const branch = process.env.PROJECT_GIT_BRANCH?.trim() || "main";
+      const id = process.env.PROJECT_ID?.trim() || slugFromGitUrl(gitUrl);
+      const name = process.env.PROJECT_NAME?.trim() || id;
+      const project: GitProject = { id, name, kind: "git", url: gitUrl, branch };
+      this.config = { projects: [project], defaultProjectId: id };
+      write(this.config);
+      return;
+    }
+
+    const localRoot = process.env.PROJECT_ROOT?.trim();
+    if (localRoot) {
+      const id = process.env.PROJECT_ID?.trim() || basename(localRoot);
+      const name = process.env.PROJECT_NAME?.trim() || id;
+      this.config = {
+        projects: [{
+          id,
+          name,
+          kind: "local",
+          path: localRoot,
+        }],
+        defaultProjectId: id,
+      };
+      write(this.config);
+    }
+  }
+
+  hasProjects(): boolean {
+    return this.config.projects.length > 0 && Boolean(this.config.defaultProjectId);
   }
 
   get defaultProjectId(): string {

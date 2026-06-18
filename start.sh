@@ -15,48 +15,53 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Resolve target project directory
-#   Priority: --project arg > PROJECT_ROOT env > prompt error
+# Resolve project bootstrap
+#   --project sets PROJECT_ROOT (local dev)
+#   Otherwise: PROJECT_GIT_URL | PROJECT_ROOT | data/projects.json
 # ---------------------------------------------------------------------------
-PROJECT_ROOT="${PROJECT_ROOT:-}"
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project|-p)
-      PROJECT_ROOT="$2"; shift 2 ;;
+      export PROJECT_ROOT="$2"; shift 2 ;;
     --project=*)
-      PROJECT_ROOT="${1#*=}"; shift ;;
+      export PROJECT_ROOT="${1#*=}"; shift ;;
     *)
       shift ;;
   esac
 done
 
-if [[ -z "$PROJECT_ROOT" ]]; then
-  echo "[error] No project directory specified."
-  echo "Usage: $0 --project /path/to/project"
-  echo "   or: set PROJECT_ROOT in .env"
+HAS_PROJECTS_JSON=false
+[[ -f "$SCRIPT_DIR/data/projects.json" ]] && HAS_PROJECTS_JSON=true
+
+can_start=false
+[[ -n "${PROJECT_GIT_URL:-}" ]] && can_start=true
+[[ "$HAS_PROJECTS_JSON" == true ]] && can_start=true
+if [[ -n "${PROJECT_ROOT:-}" && -d "$PROJECT_ROOT" ]]; then
+  can_start=true
+  export PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
+fi
+
+if [[ "$can_start" != true ]]; then
+  echo "[error] 未配置目标项目。"
+  if [[ -n "${PROJECT_ROOT:-}" && ! -d "$PROJECT_ROOT" ]]; then
+    echo "  PROJECT_ROOT 不存在: $PROJECT_ROOT"
+    echo "  服务器部署请改用 PROJECT_GIT_URL（见 .env.example），不要拷贝本机路径。"
+  fi
+  echo "  推荐: 在 .env 设置 PROJECT_GIT_URL=git@github.com:org/repo.git"
+  echo "  或:   设置 PROJECT_ROOT=/path/to/local/project"
+  echo "  或:   cp data/projects.json.example data/projects.json 后编辑"
   exit 1
 fi
 
-if [[ ! -d "$PROJECT_ROOT" ]]; then
-  echo "[error] Project directory not found: $PROJECT_ROOT"
-  echo "  1. 编辑 .env，设置 PROJECT_ROOT 为服务器上的项目绝对路径（参考 .env.example）"
-  echo "  2. 或启动时指定: $0 --project /path/to/project"
-  echo "  3. 多项目: cp data/projects.json.example data/projects.json 后编辑"
-  exit 1
+if [[ -n "${PROJECT_GIT_URL:-}" ]]; then
+  echo "[init] project_git=$PROJECT_GIT_URL"
+elif [[ -n "${PROJECT_ROOT:-}" ]]; then
+  echo "[init] project_root=$PROJECT_ROOT"
+else
+  echo "[init] projects=data/projects.json"
 fi
-
-PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
-echo "[init] project_root=$PROJECT_ROOT"
-
-echo "[init] installing bot skills into project..."
-node "${SCRIPT_DIR}/scripts/install-project-skills.mjs" "$PROJECT_ROOT" "$SCRIPT_DIR"
-echo "[init] done"
 echo ""
 
-# ---------------------------------------------------------------------------
-# Start bot with cwd = project root
-# ---------------------------------------------------------------------------
 TSX_BIN="$SCRIPT_DIR/node_modules/.bin/tsx"
 if [[ ! -x "$TSX_BIN" ]]; then
   echo "[error] Dependencies not installed (missing tsx)."
@@ -64,5 +69,5 @@ if [[ ! -x "$TSX_BIN" ]]; then
   exit 1
 fi
 
-cd "$PROJECT_ROOT"
+cd "$SCRIPT_DIR"
 exec "$TSX_BIN" "$SCRIPT_DIR/src/main.ts"

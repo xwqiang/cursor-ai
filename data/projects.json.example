@@ -3,16 +3,15 @@
     {
       "id": "my-app",
       "name": "my-app",
-      "kind": "local",
-      "path": "/path/to/my-app"
+      "kind": "git",
+      "url": "git@github.com:org/my-app.git",
+      "branch": "main"
     },
     {
-      "id": "api-service",
-      "name": "api-service",
-      "kind": "git",
-      "url": "git@github.com:org/api.git",
-      "branch": "main",
-      "mcpServers": ["mysql", "ssh-mcp"]
+      "id": "legacy-local",
+      "name": "legacy-local",
+      "kind": "local",
+      "path": "/path/to/local/checkout"
     }
   ],
   "defaultProjectId": "my-app"

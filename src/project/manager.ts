@@ -12,11 +12,19 @@ export class ProjectManager {
   private readonly binding: ChatBinding;
   private readonly readyProjects = new Set<string>();
 
-  constructor(projectRoot: string) {
+  constructor() {
     this.registry = new ProjectRegistry();
-    this.registry.initDefault(projectRoot);
+    this.registry.initDefaultFromEnv();
     this.binding = new ChatBinding();
-    this.readyProjects.add(this.registry.defaultProjectId);
+  }
+
+  async prepareDefaultProject(): Promise<ProjectContext> {
+    if (!this.registry.hasProjects()) {
+      throw new Error(
+        "未配置目标项目：在 .env 设置 PROJECT_GIT_URL（推荐）或 PROJECT_ROOT，或 cp data/projects.json.example data/projects.json",
+      );
+    }
+    return this.getContextByProjectId(this.registry.defaultProjectId);
   }
 
   get defaultProjectId(): string {

@@ -4,25 +4,37 @@ Bot 支持同时管理多个项目，不同 Telegram 群可绑定不同项目。
 
 ## 快速配置
 
-### 单项目（最常见）
+### Git 远程项目（推荐，服务器部署）
 
-只需在 `.env` 里设置 `PROJECT_ROOT`，首次 `./start.sh` 会自动生成 `data/projects.json`，**不必手动复制模板**。
+在 `.env` 设置 `PROJECT_GIT_URL`，首次 `./start.sh` 会自动 clone 到 `data/repos/<id>/` 并生成 `data/projects.json`：
 
 ```bash
 cp .env.example .env
-# 编辑 PROJECT_ROOT=/path/to/your/project
+# PROJECT_GIT_URL=git@github.com:org/my-app.git
+# PROJECT_GIT_BRANCH=main
 ./start.sh
 ```
 
-### 多项目 / 服务器部署
+宿主机需已配置 Git 凭据（SSH key 或 HTTPS credential helper）。
+
+### 本地目录（开发机）
+
+若本机已有 checkout，设置 `PROJECT_ROOT` 即可：
+
+```bash
+cp .env.example .env
+# PROJECT_ROOT=/path/to/your/project
+./start.sh
+```
+
+### 多项目
 
 参考模板复制后编辑：
 
 ```bash
 cp data/projects.json.example data/projects.json
-# 把 local 项目的 path 改成当前机器上的绝对路径
-# git 项目填写 url / branch，首次 use 时会 clone 到 data/repos/<id>/
-./start.sh --project /path/to/default-project
+# git 项目填写 url / branch；local 项目填写本机绝对 path
+./start.sh
 ```
 
 群与项目的绑定**不要手改文件**：在 Telegram 里发 `/projects` 点选即可，Bot 会自动写入 `data/chat-projects.json`。未绑定的群使用 `defaultProjectId`。

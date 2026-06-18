@@ -14,7 +14,6 @@ import {
 import { optionalBool, optionalEnv, parseIdSet, requiredEnv } from "./config/env.js";
 import { log } from "./config/logger.js";
 import { BOT_ROOT } from "./config/paths.js";
-import { loadMcpServers } from "./mcp/loader.js";
 import { toSdkMcpServers } from "./mcp/normalize.js";
 import { probeMcpServers } from "./mcp/probe.js";
 import { ProjectManager } from "./project/manager.js";
@@ -179,18 +178,17 @@ export async function runBot(): Promise<void> {
   const debug = optionalBool("TG_DEBUG", true);
   const bot = new Telegraf(botToken, { handlerTimeout: Infinity });
 
-  const projectRoot = resolve(process.env.PROJECT_ROOT ?? process.cwd());
-  const projectName = optionalEnv("PROJECT_NAME", basename(projectRoot));
-  const mcpServers = loadMcpServers(projectRoot);
-  const sdkMcp = toSdkMcpServers(mcpServers);
+  const projectManager = new ProjectManager();
+  const defaultProject = await projectManager.prepareDefaultProject();
+  const projectRoot = defaultProject.root;
+  const projectName = defaultProject.name;
+  const sdkMcp = toSdkMcpServers(defaultProject.mcpServers);
   log.startup(`project=${projectName}  root=${projectRoot}`);
   log.startup(`mcp_servers=[${Object.keys(sdkMcp).join(", ")}]`);
   log.startup("Bot 使用 Cursor SDK 本地子进程，与 Cursor IDE 里 MCP 面板是两套连接");
   if (optionalBool("TG_MCP_STARTUP_PROBE", true)) {
     await probeMcpServers(sdkMcp);
   }
-
-  const projectManager = new ProjectManager(projectRoot);
   const botInfo = await fetchBotInfo(botToken);
   const sessions = new SessionManager(projectManager);
   const adminIds = parseIdSet("TG_ADMIN_IDS");
