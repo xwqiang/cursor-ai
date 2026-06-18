@@ -1,0 +1,20 @@
+node_modules/
+*.log
+.gitnexus
+.cursor-cache/
+.run/
+
+# Secrets & local config
+.env
+
+# Runtime data (auto-created on first start)
+data/tasks.db
+data/tasks.db-*
+data/projects.json
+data/chat-projects.json
+data/repos/
+
+# Override ~/.gitignore_global — track project config in this repo
+!.gitignore
+!.cursor/
+!.cursor/**
