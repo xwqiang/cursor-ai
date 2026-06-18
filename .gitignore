@@ -12,6 +12,7 @@ data/tasks.db
 data/tasks.db-*
 data/projects.json
 data/chat-projects.json
+!data/projects.json.example
 data/repos/
 
 # Override ~/.gitignore_global — track project config in this repo

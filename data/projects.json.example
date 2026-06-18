@@ -1,0 +1,19 @@
+{
+  "projects": [
+    {
+      "id": "my-app",
+      "name": "my-app",
+      "kind": "local",
+      "path": "/path/to/my-app"
+    },
+    {
+      "id": "api-service",
+      "name": "api-service",
+      "kind": "git",
+      "url": "git@github.com:org/api.git",
+      "branch": "main",
+      "mcpServers": ["mysql", "ssh-mcp"]
+    }
+  ],
+  "defaultProjectId": "my-app"
+}

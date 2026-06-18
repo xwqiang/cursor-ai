@@ -40,6 +40,9 @@ fi
 
 if [[ ! -d "$PROJECT_ROOT" ]]; then
   echo "[error] Project directory not found: $PROJECT_ROOT"
+  echo "  1. 编辑 .env，设置 PROJECT_ROOT 为服务器上的项目绝对路径（参考 .env.example）"
+  echo "  2. 或启动时指定: $0 --project /path/to/project"
+  echo "  3. 多项目: cp data/projects.json.example data/projects.json 后编辑"
   exit 1
 fi
 
