@@ -8,6 +8,7 @@ import type { ProjectManager } from "../project/manager.js";
 import { extractReviewResult } from "../review/extract.js";
 import { buildSystemPrompt, buildUserMessage } from "../prompt/system.js";
 import { streamAndCollect } from "./stream.js";
+import type { AgentProgressReporter } from "../telegram/progress-reporter.js";
 
 export interface AskResult {
   text: string;
@@ -119,11 +120,21 @@ export class SessionManager {
       sizeBytes?: number;
     }[],
     onQueued?: (position: number) => void,
+    progress?: AgentProgressReporter,
   ): Promise<AskResult> {
     const queueKey = `${chatId}:${useAdvanced ? "advanced" : "default"}`;
     return chatRequestQueue.run(
       queueKey,
-      () => this.askOnce(chatId, question, isAdmin, replyContext, useAdvanced, attachments),
+      () =>
+        this.askOnce(
+          chatId,
+          question,
+          isAdmin,
+          replyContext,
+          useAdvanced,
+          attachments,
+          progress,
+        ),
       onQueued,
     );
   }
@@ -141,6 +152,7 @@ export class SessionManager {
       mimeType?: string;
       sizeBytes?: number;
     }[],
+    progress?: AgentProgressReporter,
   ): Promise<AskResult> {
     const release = await agentSemaphore.acquire();
     try {
@@ -165,8 +177,9 @@ export class SessionManager {
       const startedAt = Date.now();
 
       try {
+        await progress?.start();
         const run = await session.agent.send(message);
-        const raw = await streamAndCollect(run as never, "bot");
+        const raw = await streamAndCollect(run as never, "bot", progress?.hooks);
         const body = raw || "抱歉，我暂时无法回答这个问题。";
         const { text, reviewPath, attachPaths } = extractReviewResult(body, ctx.root, startedAt);
         if (!isAdmin) return { text, attachPaths };
@@ -174,6 +187,8 @@ export class SessionManager {
       } catch (err) {
         await this.disposeSessionFrom(store, chatId, useAdvanced);
         throw err;
+      } finally {
+        await progress?.finish();
       }
     } finally {
       release();

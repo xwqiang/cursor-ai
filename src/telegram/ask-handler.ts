@@ -3,11 +3,20 @@ import { createReadStream } from "node:fs";
 import type { Context } from "telegraf";
 import { formatAgentError } from "../agent/connect-error.js";
 import type { SessionManager } from "../agent/session-manager.js";
+import { optionalBool, optionalEnv } from "../config/env.js";
 import { log } from "../config/logger.js";
+import { createTelegramProgressReporter } from "./progress-reporter.js";
 import { replyHtml } from "./reply.js";
 import { sendReviewHtml } from "./send-review.js";
 
 const TYPING_INTERVAL_MS = 4_000;
+
+function parseProgressIntervalMs(): number {
+  const raw = optionalEnv("TG_STREAM_PROGRESS_INTERVAL_MS", "1500");
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 500) return 1500;
+  return Math.min(Math.floor(n), 10_000);
+}
 
 type IncomingAttachment = {
   kind: "photo" | "document";
@@ -84,6 +93,16 @@ export async function handleAgentAsk(
       );
     }
 
+    const streamProgress = optionalBool("TG_STREAM_PROGRESS", false);
+    const progress = streamProgress
+      ? createTelegramProgressReporter(
+          ctx.telegram,
+          chatId,
+          messageId,
+          parseProgressIntervalMs(),
+        )
+      : undefined;
+
     const { text: answer, reviewPath, attachPaths } = await sessions.ask(
       chatId,
       question,
@@ -92,6 +111,7 @@ export async function handleAgentAsk(
       useAdvanced,
       attachments,
       notifyQueued,
+      progress,
     );
 
     if (queueNoticeId) {
