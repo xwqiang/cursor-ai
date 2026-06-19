@@ -2,12 +2,14 @@ import { Agent } from "@cursor/sdk";
 import { Cron } from "croner";
 import { randomBytes } from "node:crypto";
 import type { Telegraf } from "telegraf";
+import { withAgentSlot } from "../agent/agent-limits.js";
 import { streamAndCollect } from "../agent/stream.js";
-import { optionalEnv, requiredEnv } from "../config/env.js";
+import { optionalBool, optionalEnv, requiredEnv } from "../config/env.js";
 import { log } from "../config/logger.js";
 import { toSdkMcpServers } from "../mcp/normalize.js";
 import type { ProjectManager } from "../project/manager.js";
 import { buildTaskFullPrompt } from "../prompt/system.js";
+import { sendHtmlMessage } from "../telegram/reply.js";
 import { TaskStore } from "./task-store.js";
 import type { ScheduledTask } from "./types.js";
 
@@ -25,8 +27,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 export class TaskScheduler {
   private tasks: ScheduledTask[] = [];
   private jobs = new Map<string, Cron>();
+  private running = new Set<string>();
   private store: TaskStore;
   private monitorTimer?: NodeJS.Timeout;
+  private readonly debug: boolean;
 
   private readonly apiKey: string;
   private readonly model: string;
@@ -38,6 +42,7 @@ export class TaskScheduler {
     this.model = optionalEnv("CURSOR_MODEL", "auto");
     this.projectManager = projectManager;
     this.store = new TaskStore();
+    this.debug = optionalBool("TG_DEBUG", false);
   }
 
   init(bot: Telegraf): void {
@@ -179,7 +184,7 @@ export class TaskScheduler {
             log.warn(
               `scheduler: monitor task=${t.id} next_in=${nextInMin}min (FAR_FUTURE)`,
             );
-          } else {
+          } else if (this.debug) {
             log.startup(
               `scheduler: monitor task=${t.id} next_in=${nextInMin}min`,
             );
@@ -194,6 +199,12 @@ export class TaskScheduler {
   // ─── Execution ──────────────────────────────────────────────────────────────
 
   private async run(task: ScheduledTask): Promise<void> {
+    if (this.running.has(task.id)) {
+      log.warn(`scheduler: task=${task.id} already running, skip overlap`);
+      return;
+    }
+    this.running.add(task.id);
+
     log.startup(`scheduler: running task=${task.id} chat=${task.chatId} project=${task.projectId ?? "default"}`);
 
     const now = Date.now();
@@ -210,6 +221,8 @@ export class TaskScheduler {
         task.chatId,
         `<b>定时任务</b> <code>${task.id}</code> 执行失败\n<code>${String(err)}</code>`,
       );
+    } finally {
+      this.running.delete(task.id);
     }
   }
 
@@ -240,22 +253,24 @@ export class TaskScheduler {
       (agentOpts as Record<string, unknown>).mcpServers = mcpServers;
     }
 
-    const agent = await Agent.create(agentOpts);
-    try {
-      const run = await agent.send(buildTaskFullPrompt(mcpNames, root, task.prompt));
-      return await withTimeout(
-        streamAndCollect(run as never, `task:${task.id}`),
-        EXECUTION_TIMEOUT_MS,
-        `task:${task.id}`,
-      );
-    } finally {
-      await agent[Symbol.asyncDispose]().catch(() => undefined);
-    }
+    return withAgentSlot(async () => {
+      const agent = await Agent.create(agentOpts);
+      try {
+        const run = await agent.send(buildTaskFullPrompt(mcpNames, root, task.prompt));
+        return await withTimeout(
+          streamAndCollect(run as never, `task:${task.id}`),
+          EXECUTION_TIMEOUT_MS,
+          `task:${task.id}`,
+        );
+      } finally {
+        await agent[Symbol.asyncDispose]().catch(() => undefined);
+      }
+    });
   }
 
   private async sendToChat(chatId: string, html: string): Promise<void> {
     try {
-      await this.bot.telegram.sendMessage(chatId, html, { parse_mode: "HTML" });
+      await sendHtmlMessage(this.bot.telegram, chatId, html);
     } catch (err) {
       log.error(`scheduler: sendMessage failed chat=${chatId}: ${String(err)}`);
     }

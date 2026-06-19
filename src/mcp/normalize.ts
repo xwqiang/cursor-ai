@@ -2,7 +2,20 @@ import type { McpServerConfig } from "@cursor/sdk";
 import type { McpServerEntry } from "./types.js";
 
 /** SDK 子进程常不加载 login shell，需显式 PATH 才能找到 npx/node。 */
-const DEFAULT_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+function defaultMcpPath(): string {
+  const extra = process.env.TG_MCP_PATH?.trim();
+  const base = process.env.PATH?.trim() || "/usr/local/bin:/usr/bin:/bin";
+  if (!extra) return base;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const segment of [...extra.split(":"), ...base.split(":")]) {
+    if (segment && !seen.has(segment)) {
+      seen.add(segment);
+      out.push(segment);
+    }
+  }
+  return out.join(":");
+}
 
 const ENV_PLACEHOLDER = /^\$\{env:([^}]+)\}$/;
 
@@ -34,7 +47,7 @@ export function toSdkMcpServers(
       command: entry.command,
       args: entry.args,
       env: {
-        PATH: DEFAULT_PATH,
+        PATH: defaultMcpPath(),
         ...resolveEntryEnv(entry.env),
       },
       ...(entry.cwd ? { cwd: entry.cwd } : {}),

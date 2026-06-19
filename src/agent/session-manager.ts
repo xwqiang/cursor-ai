@@ -1,4 +1,5 @@
 import { Agent } from "@cursor/sdk";
+import { agentSemaphore, chatRequestQueue } from "./agent-limits.js";
 import { requiredEnv, optionalEnv } from "../config/env.js";
 import { log } from "../config/logger.js";
 import { toSdkMcpServers } from "../mcp/normalize.js";
@@ -117,37 +118,65 @@ export class SessionManager {
       mimeType?: string;
       sizeBytes?: number;
     }[],
+    onQueued?: (position: number) => void,
   ): Promise<AskResult> {
-    const store = useAdvanced ? this.advancedSessions : this.sessions;
-    let session = store.get(chatId);
+    const queueKey = `${chatId}:${useAdvanced ? "advanced" : "default"}`;
+    return chatRequestQueue.run(
+      queueKey,
+      () => this.askOnce(chatId, question, isAdmin, replyContext, useAdvanced, attachments),
+      onQueued,
+    );
+  }
 
-    const currentProjectId = this.projectManager.getProjectIdForChat(chatId);
-    if (
-      !session ||
-      session.turns >= SESSION_MAX_TURNS ||
-      session.projectId !== currentProjectId
-    ) {
-      session = await this.createSession(chatId, useAdvanced);
-    }
-
-    clearTimeout(session.timer);
-    session.timer = this.resetTimer(store, chatId, useAdvanced);
-    session.turns++;
-
-    const message = buildUserMessage(question, isAdmin, replyContext, attachments);
-    const ctx = await this.projectManager.getContext(chatId);
-    const startedAt = Date.now();
-
+  private async askOnce(
+    chatId: string,
+    question: string,
+    isAdmin: boolean,
+    replyContext?: string,
+    useAdvanced = false,
+    attachments?: {
+      kind: "photo" | "document";
+      path: string;
+      filename?: string;
+      mimeType?: string;
+      sizeBytes?: number;
+    }[],
+  ): Promise<AskResult> {
+    const release = await agentSemaphore.acquire();
     try {
-      const run = await session.agent.send(message);
-      const raw = await streamAndCollect(run as never, "bot");
-      const body = raw || "抱歉，我暂时无法回答这个问题。";
-      const { text, reviewPath, attachPaths } = extractReviewResult(body, ctx.root, startedAt);
-      if (!isAdmin) return { text, attachPaths };
-      return { text, reviewPath, attachPaths };
-    } catch (err) {
-      await this.disposeSessionFrom(store, chatId, useAdvanced);
-      throw err;
+      const store = useAdvanced ? this.advancedSessions : this.sessions;
+      let session = store.get(chatId);
+
+      const currentProjectId = this.projectManager.getProjectIdForChat(chatId);
+      if (
+        !session ||
+        session.turns >= SESSION_MAX_TURNS ||
+        session.projectId !== currentProjectId
+      ) {
+        session = await this.createSession(chatId, useAdvanced);
+      }
+
+      clearTimeout(session.timer);
+      session.timer = this.resetTimer(store, chatId, useAdvanced);
+      session.turns++;
+
+      const message = buildUserMessage(question, isAdmin, replyContext, attachments);
+      const ctx = await this.projectManager.getContext(chatId);
+      const startedAt = Date.now();
+
+      try {
+        const run = await session.agent.send(message);
+        const raw = await streamAndCollect(run as never, "bot");
+        const body = raw || "抱歉，我暂时无法回答这个问题。";
+        const { text, reviewPath, attachPaths } = extractReviewResult(body, ctx.root, startedAt);
+        if (!isAdmin) return { text, attachPaths };
+        return { text, reviewPath, attachPaths };
+      } catch (err) {
+        await this.disposeSessionFrom(store, chatId, useAdvanced);
+        throw err;
+      }
+    } finally {
+      release();
     }
   }
 

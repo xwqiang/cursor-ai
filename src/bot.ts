@@ -1,6 +1,4 @@
-import { formatAgentError } from "./agent/connect-error.js";
-import { basename, dirname, resolve } from "node:path";
-import { createReadStream } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { pid } from "node:process";
 import { Telegraf, type Context } from "telegraf";
@@ -22,12 +20,10 @@ import { createParserAgent, runParserTurn } from "./scheduler/task-ai-parser.js"
 import { TaskScheduler } from "./scheduler/task-scheduler.js";
 import type { ScheduledTask } from "./scheduler/types.js";
 import { fetchBotInfo } from "./telegram/bot-info.js";
-import { replyHtml } from "./telegram/reply.js";
-import { sendReviewHtml } from "./telegram/send-review.js";
+import { handleAgentAsk } from "./telegram/ask-handler.js";
 
 const STALE_SECONDS = 10 * 60;
 const INBOX_DIR_REL = ".cursor-tg-bot/inbox";
-const TYPING_INTERVAL_MS = 4_000;
 
 // ─── Time helpers ────────────────────────────────────────────────────────────
 
@@ -175,7 +171,7 @@ type IncomingAttachment = {
 export async function runBot(): Promise<void> {
   const botToken = requiredEnv("TELEGRAM_BOT_TOKEN");
   acquireBotInstanceLock();
-  const debug = optionalBool("TG_DEBUG", true);
+  const debug = optionalBool("TG_DEBUG", false);
   const bot = new Telegraf(botToken, { handlerTimeout: Infinity });
 
   const projectManager = new ProjectManager();
@@ -201,7 +197,7 @@ export async function runBot(): Promise<void> {
   const drafts = new DraftManager();
   const apiKey = requiredEnv("CURSOR_API_KEY");
   const model = optionalEnv("CURSOR_MODEL", "auto");
-  const advancedModel = optionalEnv("CURSOR_ADVANCED_MODEL", "claude-opus-4-5");
+  const advancedModel = optionalEnv("CURSOR_ADVANCED_MODEL", "claude-opus-4-6");
 
   async function downloadTelegramFile(
     fileId: string,
@@ -911,57 +907,22 @@ export async function runBot(): Promise<void> {
     const question = ctx.message.text.replace(/^\/advanced(?:@\w+)?\s*/i, "").trim();
     if (!question) {
       await ctx.reply(
-        "用法: <code>/advanced@botname 你的问题</code>",
+        "用法: <code>/advanced@botname 你的问题</code>\n<i>每次 /advanced 独立单轮，不保留上下文。</i>",
         { parse_mode: "HTML", reply_parameters: { message_id: ctx.message.message_id } },
       );
       return;
     }
     const isAdmin = adminIds.has(ctx.from.id);
-    await ctx.telegram.setMessageReaction(ctx.chat.id, ctx.message.message_id, [
-      { type: "emoji", emoji: "🤔" },
-    ]).catch(() => undefined);
-    void ctx.telegram.sendChatAction(ctx.chat.id, "typing").catch(() => undefined);
-    const typingTimer = setInterval(() => {
-      void ctx.telegram.sendChatAction(ctx.chat.id, "typing").catch(() => undefined);
-    }, TYPING_INTERVAL_MS);
-    try {
-      const { text: answer, reviewPath, attachPaths } = await sessions.ask(
-        chatId, question, isAdmin, undefined, true,
-      );
-      clearInterval(typingTimer);
-      await ctx.telegram.setMessageReaction(ctx.chat.id, ctx.message.message_id, [
-        { type: "emoji", emoji: "👍" },
-      ]).catch(() => undefined);
-      await replyHtml(ctx, answer, ctx.message.message_id);
-      if (reviewPath) {
-        await sendReviewHtml(ctx, reviewPath, ctx.message.message_id).catch((e: unknown) => {
-          log.warn(`send review html: ${String(e)}`);
-        });
-      }
-      if (attachPaths && attachPaths.length > 0) {
-        for (const p of attachPaths) {
-          await ctx
-            .replyWithDocument(
-              { source: createReadStream(p), filename: basename(p) },
-              { reply_parameters: { message_id: ctx.message.message_id } },
-            )
-            .catch((e: unknown) => log.warn(`send attachment: ${String(e)}`));
-        }
-      }
-    } catch (err) {
-      clearInterval(typingTimer);
-      await ctx.telegram.setMessageReaction(ctx.chat.id, ctx.message.message_id, [
-        { type: "emoji", emoji: "👎" },
-      ]).catch(() => undefined);
-      await ctx.reply(`❌ ${formatAgentError(err)}`, {
-        reply_parameters: { message_id: ctx.message.message_id },
-        reply_markup: {
-          inline_keyboard: [[
-            { text: "🔄 新会话", callback_data: `err:new:${chatId}` },
-          ]],
-        },
-      });
-    }
+    await handleAgentAsk(ctx, sessions, {
+      chatId,
+      messageId: ctx.message.message_id,
+      isAdmin,
+      question,
+      useAdvanced: true,
+      resetAdvancedAfter: true,
+      debug,
+      userId: ctx.from.id,
+    });
   });
 
   // ─── Message handler: draft feedback reply + direct Q&A ─────────────────────
@@ -1113,72 +1074,19 @@ export async function runBot(): Promise<void> {
     }
 
     const isAdmin = adminIds.has(userId);
-    void ctx.telegram.setMessageReaction(ctx.chat.id, msg.message_id, [
-      { type: "emoji", emoji: "🤔" },
-    ]).catch(() => undefined);
 
-    // Typing heartbeat: send "typing" action every 4s while agent is processing
-    const chatIdNum = ctx.chat.id;
-    void ctx.telegram.sendChatAction(chatIdNum, "typing").catch(() => undefined);
-    const typingTimer = setInterval(() => {
-      void ctx.telegram.sendChatAction(chatIdNum, "typing").catch(() => undefined);
-    }, TYPING_INTERVAL_MS);
-
-    try {
-      const startedAt = Date.now();
-      if (debug) {
-        log.recv(
-          `ask start  chat=${chatId} from=${userId} msg=${msgId} admin=${isAdmin} attachments=${attachments.length}`,
-        );
-      }
-      const { text: answer, reviewPath, attachPaths } = await sessions.ask(
-        chatId, question, isAdmin, replyContext, false, attachments.length > 0 ? attachments : undefined,
-      );
-      clearInterval(typingTimer);
-      if (debug) {
-        log.recv(
-          `ask done  chat=${chatId} msg=${msgId} ms=${Date.now() - startedAt} answerLen=${answer.length} review=${Boolean(reviewPath)} attach=${attachPaths?.length ?? 0}`,
-        );
-      }
-      void ctx.telegram.setMessageReaction(ctx.chat.id, msg.message_id, [
-        { type: "emoji", emoji: "👍" },
-      ]).catch(() => undefined);
-      try {
-        await replyHtml(ctx, answer, msg.message_id);
-      } catch (e) {
-        log.warn(`replyHtml failed  chat=${chatId} msg=${msgId} err=${String(e)}`);
-        await ctx.reply(answer, { reply_parameters: { message_id: msg.message_id } }).catch(() => undefined);
-      }
-      if (reviewPath) {
-        await sendReviewHtml(ctx, reviewPath, msg.message_id).catch((e: unknown) => {
-          log.warn(`send review html: ${String(e)}`);
-        });
-      }
-      if (attachPaths && attachPaths.length > 0) {
-        for (const p of attachPaths) {
-          await ctx
-            .replyWithDocument(
-              { source: createReadStream(p), filename: basename(p) },
-              { reply_parameters: { message_id: msg.message_id } },
-            )
-            .catch((e: unknown) => log.warn(`send attachment: ${String(e)}`));
-        }
-      }
-    } catch (error) {
-      clearInterval(typingTimer);
-      log.warn(`ask failed  chat=${chatId} msg=${msgId} err=${String(error)}`);
-      void ctx.telegram.setMessageReaction(ctx.chat.id, msg.message_id, [
-        { type: "emoji", emoji: "👎" },
-      ]).catch(() => undefined);
-      await ctx.reply(`❌ ${formatAgentError(error)}`, {
-        reply_parameters: { message_id: msg.message_id },
-        reply_markup: {
-          inline_keyboard: [[
-            { text: "🔄 新会话", callback_data: `err:new:${chatId}` },
-          ]],
-        },
-      });
-    }
+    await handleAgentAsk(ctx, sessions, {
+      chatId,
+      messageId: msgId,
+      isAdmin,
+      question,
+      replyContext,
+      useAdvanced: false,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      debug,
+      userId,
+      msgId,
+    });
   });
 
   bot.catch((err: unknown) => {
@@ -1214,7 +1122,7 @@ export async function runBot(): Promise<void> {
     { command: "new", description: "清空上下文，开始新会话" },
     { command: "task", description: "创建定时任务" },
     { command: "tasks", description: "查看本群定时任务" },
-    { command: "advanced", description: "用高级模型回答（后跟问题）" },
+    { command: "advanced", description: "高级模型单轮问答（不保留上下文）" },
   ] as const;
   await Promise.all([
     bot.telegram.setMyCommands(BOT_COMMANDS).catch((e: unknown) => log.warn(`setMyCommands(default): ${String(e)}`)),
